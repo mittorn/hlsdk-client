@@ -1,6 +1,6 @@
 /***
 *
-*	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
+*	Copyright (c) 1999, 2000 Valve LLC. All rights reserved.
 *	
 *	This product contains software technology licensed from Id 
 *	Software, Inc. ("Id Technology").  Id Technology (c) 1996 Id Software, Inc. 
@@ -18,6 +18,9 @@
 
 #include "pm_materials.h"
 
+//START BOT
+class CBotCam;
+//END BOT
 
 #define PLAYER_FATAL_FALL_SPEED		1024// approx 60 feet
 #define PLAYER_MAX_SAFE_FALL_SPEED	580// approx 20 feet
@@ -71,19 +74,6 @@ typedef enum
 	PLAYER_DIE,
 	PLAYER_ATTACK1,
 } PLAYER_ANIM;
-
-#define MAX_ID_RANGE 2048
-#define SBAR_STRING_SIZE 128
-
-enum sbar_data
-{
-	SBAR_ID_TARGETNAME = 1,
-	SBAR_ID_TARGETHEALTH,
-	SBAR_ID_TARGETARMOR,
-	SBAR_END,
-};
-
-#define CHAT_INTERVAL 1.0f
 
 class CBasePlayer : public CBaseMonster
 {
@@ -185,6 +175,10 @@ public:
 
 	char m_szTeamName[TEAM_NAME_LENGTH];
 
+//START BOT
+   CBotCam *pBotCam;
+//END BOT
+
 	virtual void Spawn( void );
 	void Pain( void );
 
@@ -273,6 +267,8 @@ public:
 	void SetSuitUpdate(char *name, int fgroup, int iNoRepeat);
 	void UpdateGeigerCounter( void );
 	void CheckTimeBasedDamage( void );
+	void UpdateStepSound( void );
+	void PlayStepSound(int step, float fvol);
 
 	BOOL FBecomeProne ( void );
 	void BarnacleVictimBitten ( entvars_t *pevBarnacle );
@@ -292,24 +288,25 @@ public:
 	void SetCustomDecalFrames( int nFrames );
 	int GetCustomDecalFrames( void );
 
-	void CBasePlayer::TabulateAmmo( void );
+       void CBasePlayer::TabulateAmmo( void );
 
-	float m_flStartCharge;
-	float m_flAmmoStartCharge;
-	float m_flPlayAftershock;
-	float m_flNextAmmoBurn;// while charging, when to absorb another unit of player's ammo?
-	
-	//Player ID
-	void InitStatusBar( void );
-	void UpdateStatusBar( void );
-	int m_izSBarState[ SBAR_END ];
-	float m_flNextSBarUpdateTime;
-	float m_flStatusBarDisappearDelay;
-	char m_SbarString0[ SBAR_STRING_SIZE ];
-	char m_SbarString1[ SBAR_STRING_SIZE ];
-	
-	float m_flNextChatTime;
-	
+       float m_flStartCharge;
+       float m_flAmmoStartCharge;
+       float m_flPlayAftershock;
+       float m_flNextAmmoBurn;// while charging, when to absorb another unit of player's ammo?
+       
+       //Player ID
+       void InitStatusBar( void );
+       void UpdateStatusBar( void );
+//       int m_izSBarState[ SBAR_END ];
+       float m_flNextSBarUpdateTime;
+       float m_flStatusBarDisappearDelay;
+//       char m_SbarString0[ SBAR_STRING_SIZE ];
+//       char m_SbarString1[ SBAR_STRING_SIZE ];
+       
+       float m_flNextChatTime;
+       
+
 };
 
 #define AUTOAIM_2DEGREES  0.0348994967025

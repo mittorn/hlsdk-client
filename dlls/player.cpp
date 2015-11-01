@@ -1,6 +1,6 @@
-	/***
+/***
 *
-*	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
+*	Copyright (c) 1999, 2000 Valve LLC. All rights reserved.
 *	
 *	This product contains software technology licensed from Id 
 *	Software, Inc. ("Id Technology").  Id Technology (c) 1996 Id Software, Inc. 
@@ -30,11 +30,9 @@
 #include "weapons.h"
 #include "soundent.h"
 #include "monsters.h"
-#include "shake.h"
+#include "../engine/shake.h"
 #include "decals.h"
 #include "gamerules.h"
-#include "game.h"
-#include "hltv.h"
 
 // #define DUCKFIX
 
@@ -43,17 +41,19 @@ extern DLL_GLOBAL BOOL		g_fGameOver;
 extern DLL_GLOBAL	BOOL	g_fDrawLines;
 int gEvilImpulse101;
 extern DLL_GLOBAL int		g_iSkillLevel, gDisplayTitle;
-
-
 BOOL gInitHUD = TRUE;
 
 extern void CopyToBodyQue(entvars_t* pev);
 extern void respawn(entvars_t *pev, BOOL fCopyCorpse);
 extern Vector VecBModelOrigin(entvars_t *pevBModel );
 extern edict_t *EntSelectSpawnPoint( CBaseEntity *pPlayer );
+int MapTextureTypeStepType(char chTextureType);
 
 // the world node graph
 extern CGraph	WorldGraph;
+
+#define	PLAYER_WALLJUMP_SPEED 300 // how fast we can spring off walls
+#define PLAYER_LONGJUMP_SPEED 350 // how fast we longjump
 
 #define TRAIN_ACTIVE	0x80 
 #define TRAIN_NEW		0xc0
@@ -66,6 +66,12 @@ extern CGraph	WorldGraph;
 
 #define	FLASH_DRAIN_TIME	 1.2 //100 units/3 minutes
 #define	FLASH_CHARGE_TIME	 0.2 // 100 units/20 seconds  (seconds per unit)
+
+
+//#define PLAYER_MAX_SAFE_FALL_DIST	20// falling any farther than this many feet will inflict damage
+//#define	PLAYER_FATAL_FALL_DIST		60// 100% damage inflicted if player falls this many feet
+//#define	DAMAGE_PER_UNIT_FALLEN		(float)( 100 ) / ( ( PLAYER_FATAL_FALL_DIST - PLAYER_MAX_SAFE_FALL_DIST ) * 12 )
+//#define MAX_SAFE_FALL_UNITS			( PLAYER_MAX_SAFE_FALL_DIST * 12 )
 
 // Global Savedata for player
 TYPEDESCRIPTION	CBasePlayer::m_playerSaveData[] = 
@@ -171,7 +177,6 @@ int gmsgTeamInfo = 0;
 int gmsgTeamScore = 0;
 int gmsgGameMode = 0;
 int gmsgMOTD = 0;
-int gmsgServerName = 0;
 int gmsgAmmoPickup = 0;
 int gmsgWeapPickup = 0;
 int gmsgItemPickup = 0;
@@ -182,12 +187,6 @@ int gmsgTextMsg = 0;
 int gmsgSetFOV = 0;
 int gmsgShowMenu = 0;
 int gmsgGeigerRange = 0;
-int gmsgTeamNames = 0;
-
-int gmsgStatusText = 0;
-int gmsgStatusValue = 0; 
-
-
 
 void LinkUserMessages( void )
 {
@@ -214,12 +213,11 @@ void LinkUserMessages( void )
 	gmsgInitHUD = REG_USER_MSG("InitHUD", 0 );		// called every time a new player joins the server
 	gmsgShowGameTitle = REG_USER_MSG("GameTitle", 1);
 	gmsgDeathMsg = REG_USER_MSG( "DeathMsg", -1 );
-	gmsgScoreInfo = REG_USER_MSG( "ScoreInfo", 9 );
+	gmsgScoreInfo = REG_USER_MSG( "ScoreInfo", 5 );
 	gmsgTeamInfo = REG_USER_MSG( "TeamInfo", -1 );  // sets the name of a player's team
 	gmsgTeamScore = REG_USER_MSG( "TeamScore", -1 );  // sets the score of a team on the scoreboard
 	gmsgGameMode = REG_USER_MSG( "GameMode", 1 );
 	gmsgMOTD = REG_USER_MSG( "MOTD", -1 );
-	gmsgServerName = REG_USER_MSG( "ServerName", -1 );
 	gmsgAmmoPickup = REG_USER_MSG( "AmmoPickup", 2 );
 	gmsgWeapPickup = REG_USER_MSG( "WeapPickup", 1 );
 	gmsgItemPickup = REG_USER_MSG( "ItemPickup", -1 );
@@ -229,11 +227,6 @@ void LinkUserMessages( void )
 	gmsgShake = REG_USER_MSG("ScreenShake", sizeof(ScreenShake));
 	gmsgFade = REG_USER_MSG("ScreenFade", sizeof(ScreenFade));
 	gmsgAmmoX = REG_USER_MSG("AmmoX", 2);
-	gmsgTeamNames = REG_USER_MSG( "TeamNames", -1 );
-
-	gmsgStatusText = REG_USER_MSG("StatusText", -1);
-	gmsgStatusValue = REG_USER_MSG("StatusValue", 3); 
-
 }
 
 LINK_ENTITY_TO_CLASS( player, CBasePlayer );
@@ -384,7 +377,6 @@ Vector CBasePlayer :: GetGunPosition( )
 	Vector origin;
 	
 	origin = pev->origin + pev->view_ofs;
-
 	return origin;
 }
 
@@ -511,15 +503,6 @@ int CBasePlayer :: TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, 
 			if (bitsDamageType & (DMG_PARALYZE << i))
 				m_rgbTimeBasedDamage[i] = 0;
 	}
-
-	// tell director about it
-	MESSAGE_BEGIN( MSG_SPEC, SVC_DIRECTOR );
-		WRITE_BYTE ( 9 );	// command length in bytes
-		WRITE_BYTE ( DRC_CMD_EVENT );	// take damage event
-		WRITE_SHORT( ENTINDEX(this->edict()) );	// index number of primary entity
-		WRITE_SHORT( ENTINDEX(ENT(pevInflictor)) );	// index number of secondary entity
-		WRITE_LONG( 5 );   // eventflags (priority and flags)
-	MESSAGE_END();
 
 
 	// how bad is it, doc?
@@ -860,10 +843,6 @@ void CBasePlayer::Killed( entvars_t *pevAttacker, int iGib )
 {
 	CSound *pSound;
 
-	// Holster weapon immediately, to allow it to cleanup
-	if ( m_pActiveItem )
-		m_pActiveItem->Holster( );
-
 	g_pGameRules->PlayerKilled( this, pevAttacker, g_pevLastInflictor );
 
 	if ( m_pTank != NULL )
@@ -882,14 +861,14 @@ void CBasePlayer::Killed( entvars_t *pevAttacker, int iGib )
 	}
 
 	SetAnimation( PLAYER_DIE );
-	
+		
 	m_iRespawnFrames = 0;
 
 	pev->modelindex = g_ulModelIndexPlayer;    // don't use eyes
 
 	pev->deadflag		= DEAD_DYING;
 	pev->movetype		= MOVETYPE_TOSS;
-	ClearBits( pev->flags, FL_ONGROUND );
+	ClearBits(pev->flags, FL_ONGROUND);
 	if (pev->velocity.z < 10)
 		pev->velocity.z += RANDOM_FLOAT(0,300);
 
@@ -910,7 +889,7 @@ void CBasePlayer::Killed( entvars_t *pevAttacker, int iGib )
 	MESSAGE_END();
 
 	// reset FOV
-	pev->fov = m_iFOV = m_iClientFOV = 0;
+	m_iFOV = m_iClientFOV = 0;
 
 	MESSAGE_BEGIN( MSG_ONE, gmsgSetFOV, NULL, pev );
 		WRITE_BYTE(0);
@@ -1109,25 +1088,6 @@ void CBasePlayer::SetAnimation( PLAYER_ANIM playerAnim )
 	ResetSequenceInfo( );
 }
 
-/*
-===========
-TabulateAmmo
-This function is used to find and store 
-all the ammo we have into the ammo vars.
-============
-*/
-void CBasePlayer::TabulateAmmo()
-{
-	ammo_9mm = AmmoInventory( GetAmmoIndex( "9mm" ) );
-	ammo_357 = AmmoInventory( GetAmmoIndex( "357" ) );
-	ammo_argrens = AmmoInventory( GetAmmoIndex( "ARgrenades" ) );
-	ammo_bolts = AmmoInventory( GetAmmoIndex( "bolts" ) );
-	ammo_buckshot = AmmoInventory( GetAmmoIndex( "buckshot" ) );
-	ammo_rockets = AmmoInventory( GetAmmoIndex( "rockets" ) );
-	ammo_uranium = AmmoInventory( GetAmmoIndex( "uranium" ) );
-	ammo_hornets = AmmoInventory( GetAmmoIndex( "Hornets" ) );
-}
-
 
 /*
 ===========
@@ -1213,6 +1173,17 @@ void CBasePlayer::WaterMove()
 	{
 		if (FBitSet(pev->flags, FL_INWATER))
 		{       
+#if 0
+			// play leave water sound
+			switch (RANDOM_LONG(0,3))
+			{
+			case 0: EMIT_SOUND(ENT(pev), CHAN_BODY, "player/pl_wade1.wav", 1, ATTN_NORM); break;
+			case 1: EMIT_SOUND(ENT(pev), CHAN_BODY, "player/pl_wade2.wav", 1, ATTN_NORM); break;
+			case 2: EMIT_SOUND(ENT(pev), CHAN_BODY, "player/pl_wade3.wav", 1, ATTN_NORM); break;
+			case 3: EMIT_SOUND(ENT(pev), CHAN_BODY, "player/pl_wade4.wav", 1, ATTN_NORM); break;
+			}
+#endif
+
 			ClearBits(pev->flags, FL_INWATER);
 		}
 		return;
@@ -1245,16 +1216,33 @@ void CBasePlayer::WaterMove()
 	
 	if (!FBitSet(pev->flags, FL_INWATER))
 	{
+#if 0
+		// player enter water sound
+		if (pev->watertype == CONTENT_WATER)
+		{
+			switch (RANDOM_LONG(0,3))
+			{
+			case 0:	EMIT_SOUND(ENT(pev), CHAN_BODY, "player/pl_wade1.wav", 1, ATTN_NORM); break;
+			case 1:	EMIT_SOUND(ENT(pev), CHAN_BODY, "player/pl_wade2.wav", 1, ATTN_NORM); break;
+			case 2:	EMIT_SOUND(ENT(pev), CHAN_BODY, "player/pl_wade3.wav", 1, ATTN_NORM); break;
+			case 3:	EMIT_SOUND(ENT(pev), CHAN_BODY, "player/pl_wade4.wav", 1, ATTN_NORM); break;
+			}
+		}
+#endif
+	
 		SetBits(pev->flags, FL_INWATER);
 		pev->dmgtime = 0;
 	}
+	
+	if (!FBitSet(pev->flags, FL_WATERJUMP))
+		pev->velocity = pev->velocity - 0.8 * pev->waterlevel * gpGlobals->frametime * pev->velocity;
 }
 
 
 // TRUE if the player is attached to a ladder
 BOOL CBasePlayer::IsOnLadder( void )
 { 
-	return ( pev->movetype == MOVETYPE_FLY );
+	return (pev->movetype == MOVETYPE_FLY);
 }
 
 void CBasePlayer::PlayerDeathThink(void)
@@ -1284,15 +1272,10 @@ void CBasePlayer::PlayerDeathThink(void)
 	{
 		StudioFrameAdvance( );
 
-		m_iRespawnFrames++;				// Note, these aren't necessarily real "frames", so behavior is dependent on # of client movement commands
+		m_iRespawnFrames++;		// Note, these aren't necessarily real "frames", so behavior is dependent on # of client movement commands
 		if ( m_iRespawnFrames < 120 )   // Animations should be no longer than this
 			return;
 	}
-
-	// once we're done animating our death and we're on the ground, we want to set movetype to None so our dead body won't do collisions and stuff anymore
-	// this prevents a bug where the dead body would go to a player's head if he walked over it while the dead player was clicking their button to respawn
-	if ( pev->movetype != MOVETYPE_NONE && FBitSet(pev->flags, FL_ONGROUND) )
-		pev->movetype = MOVETYPE_NONE;
 
 	if (pev->deadflag == DEAD_DYING)
 		pev->deadflag = DEAD_DEAD;
@@ -1330,7 +1313,7 @@ void CBasePlayer::PlayerDeathThink(void)
 	
 // wait for any button down,  or mp_forcerespawn is set and the respawn time is up
 	if (!fAnyButtonDown 
-		&& !( g_pGameRules->IsMultiplayer() && forcerespawn.value > 0 && (gpGlobals->time > (m_fDeadTime + 5))) )
+		&& !( g_pGameRules->IsMultiplayer() && CVAR_GET_FLOAT("mp_forcerespawn") > 0 && (gpGlobals->time > (m_fDeadTime + 5))) )
 		return;
 
 	pev->button = 0;
@@ -1545,18 +1528,16 @@ void CBasePlayer::Jump()
 // many features in this function use v_forward, so makevectors now.
 	UTIL_MakeVectors (pev->angles);
 
-	// ClearBits(pev->flags, FL_ONGROUND);		// don't stairwalk
-	
 	SetAnimation( PLAYER_JUMP );
 
-	if ( m_fLongJump &&
-		(pev->button & IN_DUCK) &&
-		( pev->flDuckTime > 0 ) &&
-		pev->velocity.Length() > 50 )
+	if ( FBitSet(pev->flags, FL_DUCKING ) || FBitSet(m_afPhysicsFlags, PFLAG_DUCKING) )
 	{
-		SetAnimation( PLAYER_SUPERJUMP );
+		if ( m_fLongJump && (pev->button & IN_DUCK) && gpGlobals->time - m_flDuckTime < 1 && pev->velocity.Length() > 50 )
+		{
+			SetAnimation( PLAYER_SUPERJUMP );
+		}
 	}
-
+	
 	// If you're standing on a conveyor, add it's velocity to yours (for momentum)
 	entvars_t *pevGround = VARS(pev->groundentity);
 	if ( pevGround && (pevGround->flags & FL_CONVEYOR) )
@@ -1589,10 +1570,7 @@ void CBasePlayer::Duck( )
 {
 	if (pev->button & IN_DUCK) 
 	{
-		if ( m_IdealActivity != ACT_LEAP )
-		{
-			SetAnimation( PLAYER_WALK );
-		}
+		SetAnimation( PLAYER_WALK );
 	}
 }
 
@@ -1628,8 +1606,6 @@ void CBasePlayer::AddPoints( int score, BOOL bAllowNegativeScore )
 		WRITE_BYTE( ENTINDEX(edict()) );
 		WRITE_SHORT( pev->frags );
 		WRITE_SHORT( m_iDeaths );
-		WRITE_SHORT( 0 );
-		WRITE_SHORT( g_pGameRules->GetTeamIndex( m_szTeamName ) + 1 );
 	MESSAGE_END();
 }
 
@@ -1652,109 +1628,354 @@ void CBasePlayer::AddPointsToTeam( int score, BOOL bAllowNegativeScore )
 	}
 }
 
-//Player ID
-void CBasePlayer::InitStatusBar()
+#if 0
+void CBasePlayer::CheckWeapon(void)
 {
-	m_flStatusBarDisappearDelay = 0;
-	m_SbarString1[0] = m_SbarString0[0] = 0; 
+	// play a weapon idle anim if it's time!
+	if ( gpGlobals->time > m_flTimeWeaponIdle )
+	{
+		WeaponIdle ( );
+	}
+}
+#endif
+
+
+// play a footstep if it's time - this will eventually be frame-based. not time based.
+
+#define STEP_CONCRETE	0		// default step sound
+#define STEP_METAL		1		// metal floor
+#define STEP_DIRT		2		// dirt, sand, rock
+#define STEP_VENT		3		// ventillation duct
+#define STEP_GRATE		4		// metal grating
+#define STEP_TILE		5		// floor tiles
+#define STEP_SLOSH		6		// shallow liquid puddle
+#define STEP_WADE		7		// wading in liquid
+#define STEP_LADDER		8		// climbing ladder
+
+// Play correct step sound for material we're on or in
+
+void CBasePlayer :: PlayStepSound(int step, float fvol)
+{
+	static int iSkipStep = 0;
+
+	if ( !g_pGameRules->PlayFootstepSounds( this, fvol ) )
+		return;
+
+	// irand - 0,1 for right foot, 2,3 for left foot
+	// used to alternate left and right foot
+	int irand = RANDOM_LONG(0,1) + (m_iStepLeft * 2);
+
+	m_iStepLeft = !m_iStepLeft;
+
+	switch (step)
+	{
+	default:
+	case STEP_CONCRETE:
+		switch (irand)
+		{
+		// right foot
+		case 0:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_step1.wav", fvol, ATTN_NORM);	break;
+		case 1:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_step3.wav", fvol, ATTN_NORM);	break;
+		// left foot
+		case 2:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_step2.wav", fvol, ATTN_NORM);	break;
+		case 3:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_step4.wav", fvol, ATTN_NORM);	break;
+		}
+		break;
+	case STEP_METAL:
+		switch(irand)
+		{
+		// right foot
+		case 0:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_metal1.wav", fvol, ATTN_NORM);	break;
+		case 1:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_metal3.wav", fvol, ATTN_NORM);	break;
+		// left foot
+		case 2:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_metal2.wav", fvol, ATTN_NORM);	break;
+		case 3:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_metal4.wav", fvol, ATTN_NORM);	break;
+		}
+		break;
+	case STEP_DIRT:
+		switch(irand)
+		{
+		// right foot
+		case 0:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_dirt1.wav", fvol, ATTN_NORM);	break;
+		case 1:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_dirt3.wav", fvol, ATTN_NORM);	break;
+		// left foot
+		case 2:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_dirt2.wav", fvol, ATTN_NORM);	break;
+		case 3:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_dirt4.wav", fvol, ATTN_NORM);	break;
+		}
+		break;
+	case STEP_VENT:
+		switch(irand)
+		{
+		// right foot
+		case 0:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_duct1.wav", fvol, ATTN_NORM);	break;
+		case 1:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_duct3.wav", fvol, ATTN_NORM);	break;
+		// left foot
+		case 2:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_duct2.wav", fvol, ATTN_NORM);	break;
+		case 3:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_duct4.wav", fvol, ATTN_NORM);	break;
+		}
+		break;
+	case STEP_GRATE:
+		switch(irand)
+		{
+		// right foot
+		case 0:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_grate1.wav", fvol, ATTN_NORM);	break;
+		case 1:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_grate3.wav", fvol, ATTN_NORM);	break;
+		// left foot
+		case 2:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_grate2.wav", fvol, ATTN_NORM);	break;
+		case 3:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_grate4.wav", fvol, ATTN_NORM);	break;
+		}
+		break;
+	case STEP_TILE:
+		if (!RANDOM_LONG(0,4))
+			irand = 4;
+		switch(irand)
+		{
+		// right foot
+		case 0:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_tile1.wav", fvol, ATTN_NORM);	break;
+		case 1:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_tile3.wav", fvol, ATTN_NORM);	break;
+		// left foot
+		case 2:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_tile2.wav", fvol, ATTN_NORM);	break;
+		case 3:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_tile4.wav", fvol, ATTN_NORM);	break;
+		case 4: EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_tile5.wav", fvol, ATTN_NORM);	break;
+		}
+		break;
+	case STEP_SLOSH:
+		switch(irand)
+		{
+		// right foot
+		case 0:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_slosh1.wav", fvol, ATTN_NORM);	break;
+		case 1:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_slosh3.wav", fvol, ATTN_NORM);	break;
+		// left foot
+		case 2:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_slosh2.wav", fvol, ATTN_NORM);	break;
+		case 3:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_slosh4.wav", fvol, ATTN_NORM);	break;
+		}
+		break;
+	case STEP_WADE:
+		if ( iSkipStep == 0 )
+		{
+			iSkipStep++;
+			break;
+		}
+
+		if ( iSkipStep++ == 3 )
+		{
+			iSkipStep = 0;
+		}
+
+		switch (irand)
+		{
+		// right foot
+		case 0:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_wade1.wav", fvol, ATTN_NORM);	break;
+		case 1:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_wade2.wav", fvol, ATTN_NORM);	break;
+		// left foot
+		case 2:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_wade3.wav", fvol, ATTN_NORM);	break;
+		case 3:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_wade4.wav", fvol, ATTN_NORM);	break;
+		}
+		break;
+	case STEP_LADDER:
+		switch(irand)
+		{
+		// right foot
+		case 0:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_ladder1.wav", fvol, ATTN_NORM);	break;
+		case 1:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_ladder3.wav", fvol, ATTN_NORM);	break;
+		// left foot
+		case 2:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_ladder2.wav", fvol, ATTN_NORM);	break;
+		case 3:	EMIT_SOUND( ENT(pev), CHAN_BODY, "player/pl_ladder4.wav", fvol, ATTN_NORM);	break;
+		}
+		break;
+	}
+}	
+
+// Simple mapping from texture type character to step type
+
+int MapTextureTypeStepType(char chTextureType)
+{
+switch (chTextureType)
+	{
+	default:
+	case CHAR_TEX_CONCRETE:	return STEP_CONCRETE;	
+	case CHAR_TEX_METAL: return STEP_METAL;	
+	case CHAR_TEX_DIRT: return STEP_DIRT;	
+	case CHAR_TEX_VENT: return STEP_VENT;	
+	case CHAR_TEX_GRATE: return STEP_GRATE;	
+	case CHAR_TEX_TILE: return STEP_TILE;
+	case CHAR_TEX_SLOSH: return STEP_SLOSH;
+	}
 }
 
-void CBasePlayer::UpdateStatusBar()
+// Play left or right footstep based on material player is on or in
+
+void CBasePlayer :: UpdateStepSound( void )
 {
-	int newSBarState[ SBAR_END ];
-	char sbuf0[ SBAR_STRING_SIZE ];
-	char sbuf1[ SBAR_STRING_SIZE ];
+	int	fWalking;
+	float fvol;
+	char szbuffer[64];
+	const char *pTextureName;
+	Vector start, end;
+	float rgfl1[3];
+	float rgfl2[3];
+	Vector knee;
+	Vector feet;
+	Vector center;
+	float height;
+	float speed;
+	float velrun;
+	float velwalk;
+	float flduck;
+	int	fLadder;
+	int step;
 
-	memset( newSBarState, 0, sizeof(newSBarState) );
-	strcpy( sbuf0, m_SbarString0 );
-	strcpy( sbuf1, m_SbarString1 );
+	if (gpGlobals->time <= m_flTimeStepSound)
+		return;
 
-	// Find an ID Target
-	TraceResult tr;
-	UTIL_MakeVectors( pev->v_angle + pev->punchangle );
-	Vector vecSrc = EyePosition();
-	Vector vecEnd = vecSrc + (gpGlobals->v_forward * MAX_ID_RANGE);
-	UTIL_TraceLine( vecSrc, vecEnd, dont_ignore_monsters, edict(), &tr);
+	if (pev->flags & FL_FROZEN)
+		return;
 
-	if (tr.flFraction != 1.0)
+	speed = pev->velocity.Length();
+
+	// determine if we are on a ladder
+	fLadder = IsOnLadder();
+
+	// UNDONE: need defined numbers for run, walk, crouch, crouch run velocities!!!!	
+	if (FBitSet(pev->flags, FL_DUCKING) || fLadder)
 	{
-		if ( !FNullEnt( tr.pHit ) )
+		velwalk = 60;		// These constants should be based on cl_movespeedkey * cl_forwardspeed somehow
+		velrun = 80;		// UNDONE: Move walking to server
+		flduck = 0.1;
+	}
+	else
+	{
+		velwalk = 120;
+		velrun = 210;
+		flduck = 0.0;
+	}
+
+	// ALERT (at_console, "vel: %f\n", vecVel.Length());
+	
+	// if we're on a ladder or on the ground, and we're moving fast enough,
+	// play step sound.  Also, if m_flTimeStepSound is zero, get the new
+	// sound right away - we just started moving in new level.
+
+	if ((fLadder || FBitSet (pev->flags, FL_ONGROUND)) && pev->velocity != g_vecZero 
+		&& (speed >= velwalk || !m_flTimeStepSound))
+	{
+		SetAnimation( PLAYER_WALK );
+		
+		fWalking = speed < velrun;		
+
+		center = knee = feet = (pev->absmin + pev->absmax) * 0.5;
+		height = pev->absmax.z - pev->absmin.z;
+
+		knee.z = pev->absmin.z + height * 0.2;
+		feet.z = pev->absmin.z;
+
+		// find out what we're stepping in or on...
+		if (fLadder)
 		{
-			CBaseEntity *pEntity = CBaseEntity::Instance( tr.pHit );
+			step = STEP_LADDER;
+			fvol = 0.35;
+			m_flTimeStepSound = gpGlobals->time + 0.35;
+		}
+		else if ( UTIL_PointContents ( knee ) == CONTENTS_WATER )
+		{
+			step = STEP_WADE;
+			fvol = 0.65;
+			m_flTimeStepSound = gpGlobals->time + 0.6;
+		}
+		else if (UTIL_PointContents ( feet ) == CONTENTS_WATER )
+		{
+			step = STEP_SLOSH;
+			fvol = fWalking ? 0.2 : 0.5;
+			m_flTimeStepSound = fWalking ? gpGlobals->time + 0.4 : gpGlobals->time + 0.3;		
+		}
+		else
+		{
+			// find texture under player, if different from current texture, 
+			// get material type
 
-			if (pEntity->Classify() == CLASS_PLAYER )
+			start = end = center;							// center point of player BB
+			start.z = end.z = pev->absmin.z;				// copy zmin
+			start.z += 4.0;									// extend start up
+			end.z -= 24.0;									// extend end down
+			
+			start.CopyToArray(rgfl1);
+			end.CopyToArray(rgfl2);
+
+			pTextureName = TRACE_TEXTURE( ENT( pev->groundentity), rgfl1, rgfl2 );
+			if ( pTextureName )
 			{
-				newSBarState[ SBAR_ID_TARGETNAME ] = ENTINDEX( pEntity->edict() );
-				strcpy( sbuf1, "1 %p1\n2 Health: %i2%%\n3 Armor: %i3%%" );
-
-				// allies and medics get to see the targets health
-				if ( g_pGameRules->PlayerRelationship( this, pEntity ) == GR_TEAMMATE )
+				// strip leading '-0' or '{' or '!'
+				if (*pTextureName == '-')
+					pTextureName += 2;
+				if (*pTextureName == '{' || *pTextureName == '!')
+					pTextureName++;
+				
+				if (_strnicmp(pTextureName, m_szTextureName, CBTEXTURENAMEMAX-1))
 				{
-					newSBarState[ SBAR_ID_TARGETHEALTH ] = 100 * (pEntity->pev->health / pEntity->pev->max_health);
-					newSBarState[ SBAR_ID_TARGETARMOR ] = pEntity->pev->armorvalue; //No need to get it % based since 100 it's the max.
-				}
+					// current texture is different from texture player is on...
+					// set current texture
+					strcpy(szbuffer, pTextureName);
+					szbuffer[CBTEXTURENAMEMAX - 1] = 0;
+					strcpy(m_szTextureName, szbuffer);
+					
+					// ALERT ( at_aiconsole, "texture: %s\n", m_szTextureName );
 
-				m_flStatusBarDisappearDelay = gpGlobals->time + 1.0;
+					// get texture type
+					m_chTextureType = TEXTURETYPE_Find(m_szTextureName);	
+				}
+			}
+			
+			step = MapTextureTypeStepType(m_chTextureType);
+
+			switch (m_chTextureType)
+			{
+			default:
+			case CHAR_TEX_CONCRETE:						
+				fvol = fWalking ? 0.2 : 0.5;
+				m_flTimeStepSound = fWalking ? gpGlobals->time + 0.4 : gpGlobals->time + 0.3;
+				break;
+
+			case CHAR_TEX_METAL:	
+				fvol = fWalking ? 0.2 : 0.5;
+				m_flTimeStepSound = fWalking ? gpGlobals->time + 0.4 : gpGlobals->time + 0.3;
+				break;
+
+			case CHAR_TEX_DIRT:	
+				fvol = fWalking ? 0.25 : 0.55;
+				m_flTimeStepSound = fWalking ? gpGlobals->time + 0.4 : gpGlobals->time + 0.3;
+				break;
+
+			case CHAR_TEX_VENT:	
+				fvol = fWalking ? 0.4 : 0.7;
+				m_flTimeStepSound = fWalking ? gpGlobals->time + 0.4 : gpGlobals->time + 0.3;
+				break;
+
+			case CHAR_TEX_GRATE:
+				fvol = fWalking ? 0.2 : 0.5;
+				m_flTimeStepSound = fWalking ? gpGlobals->time + 0.4 : gpGlobals->time + 0.3;
+				break;
+
+			case CHAR_TEX_TILE:	
+				fvol = fWalking ? 0.2 : 0.5;
+				m_flTimeStepSound = fWalking ? gpGlobals->time + 0.4 : gpGlobals->time + 0.3;
+				break;
+
+			case CHAR_TEX_SLOSH:
+				fvol = fWalking ? 0.2 : 0.5;
+				m_flTimeStepSound = fWalking ? gpGlobals->time + 0.4 : gpGlobals->time + 0.3;
+				break;
 			}
 		}
-		else if ( m_flStatusBarDisappearDelay > gpGlobals->time )
-		{
-			// hold the values for a short amount of time after viewing the object
-			newSBarState[ SBAR_ID_TARGETNAME ] = m_izSBarState[ SBAR_ID_TARGETNAME ];
-			newSBarState[ SBAR_ID_TARGETHEALTH ] = m_izSBarState[ SBAR_ID_TARGETHEALTH ];
-			newSBarState[ SBAR_ID_TARGETARMOR ] = m_izSBarState[ SBAR_ID_TARGETARMOR ];
-		}
-	}
+		
+		m_flTimeStepSound += flduck; // slower step time if ducking
 
-	BOOL bForceResend = FALSE;
+		// play the sound
 
-	if ( strcmp( sbuf0, m_SbarString0 ) )
-	{
-		MESSAGE_BEGIN( MSG_ONE, gmsgStatusText, NULL, pev );
-			WRITE_BYTE( 0 );
-			WRITE_STRING( sbuf0 );
-		MESSAGE_END();
-
-		strcpy( m_SbarString0, sbuf0 );
-
-		// make sure everything's resent
-		bForceResend = TRUE;
-	}
-
-	if ( strcmp( sbuf1, m_SbarString1 ) )
-	{
-		MESSAGE_BEGIN( MSG_ONE, gmsgStatusText, NULL, pev );
-			WRITE_BYTE( 1 );
-			WRITE_STRING( sbuf1 );
-		MESSAGE_END();
-
-		strcpy( m_SbarString1, sbuf1 );
-
-		// make sure everything's resent
-		bForceResend = TRUE;
-	}
-
-	// Check values and send if they don't match
-	for (int i = 1; i < SBAR_END; i++)
-	{
-		if ( newSBarState[i] != m_izSBarState[i] || bForceResend )
-		{
-			MESSAGE_BEGIN( MSG_ONE, gmsgStatusValue, NULL, pev );
-				WRITE_BYTE( i );
-				WRITE_SHORT( newSBarState[i] );
-			MESSAGE_END();
-
-			m_izSBarState[i] = newSBarState[i];
-		}
+		// 35% volume if ducking
+		if ( pev->flags & FL_DUCKING )
+			fvol *= 0.35;
 	}
 }
-
-
-
-
-
-
-
 
 
 #define CLIMB_SHAKE_FREQUENCY	22	// how many frames in between screen shakes when climbing
@@ -1874,6 +2095,10 @@ void CBasePlayer::PreThink(void)
 	// If trying to duck, already ducked, or in the process of ducking
 	if ((pev->button & IN_DUCK) || FBitSet(pev->flags,FL_DUCKING) || (m_afPhysicsFlags & PFLAG_DUCKING) )
 		Duck();
+
+	// play a footstep if it's time - this will eventually be frame-based. not time based.
+	
+	UpdateStepSound();
 
 	if ( !FBitSet ( pev->flags, FL_ONGROUND ) )
 	{
@@ -2133,7 +2358,6 @@ Things powered by the battery
 */
 
 // if in range of radiation source, ping geiger counter
-
 #define GEIGERDELAY 0.25
 
 void CBasePlayer :: UpdateGeigerCounter( void )
@@ -2460,8 +2684,8 @@ void CBasePlayer :: UpdatePlayerSound ( void )
 	if (m_iWeaponFlash < 0)
 		m_iWeaponFlash = 0;
 
-	//UTIL_MakeVectors ( pev->angles );
-	//gpGlobals->v_forward.z = 0;
+	UTIL_MakeVectors ( pev->angles );
+	gpGlobals->v_forward.z = 0;
 
 	// Below are a couple of useful little bits that make it easier to determine just how much noise the 
 	// player is making. 
@@ -2503,6 +2727,8 @@ void CBasePlayer::PostThink()
 
 	if ( (FBitSet(pev->flags, FL_ONGROUND)) && (pev->health > 0) && m_flFallVelocity >= PLAYER_FALL_PUNCH_THRESHHOLD )
 	{
+		float fvol = 0.5;
+
 		// ALERT ( at_console, "%f\n", m_flFallVelocity );
 
 		if (pev->watertype == CONTENT_WATER)
@@ -2529,6 +2755,24 @@ void CBasePlayer::PostThink()
 				TakeDamage(VARS(eoNullEntity), VARS(eoNullEntity), flFallDamage, DMG_FALL ); 
 				pev->punchangle.x = 0;
 			}
+
+			fvol = 1.0;
+		}
+		else if ( m_flFallVelocity > PLAYER_MAX_SAFE_FALL_SPEED / 2 )
+		{
+			// EMIT_SOUND(ENT(pev), CHAN_VOICE, "player/pl_jumpland2.wav", 1, ATTN_NORM);
+			fvol = 0.85;
+		}
+		else if ( m_flFallVelocity < PLAYER_MIN_BOUNCE_SPEED )
+		{
+			fvol = 0;
+		}
+
+		if ( fvol > 0.0 )
+		{
+			// get current texture under player right away
+			m_flTimeStepSound = 0;
+			UpdateStepSound();
 		}
 
 		if ( IsAlive() )
@@ -2591,18 +2835,6 @@ pt_end:
 					{
 						gun->m_flTimeWeaponIdle		= max( gun->m_flTimeWeaponIdle - gpGlobals->frametime, -0.001 );
 					}
-
-					if ( gun->pev->fuser1 != 1000 )
-					{
-						gun->pev->fuser1	= max( gun->pev->fuser1 - gpGlobals->frametime, -0.001 );
-					}
-
-					// Only decrement if not flagged as NO_DECREMENT
-//					if ( gun->m_flPumpTime != 1000 )
-				//	{
-				//		gun->m_flPumpTime	= max( gun->m_flPumpTime - gpGlobals->frametime, -0.001 );
-				//	}
-					
 				}
 
 				pPlayerItem = pPlayerItem->m_pNext;
@@ -2613,24 +2845,6 @@ pt_end:
 	m_flNextAttack -= gpGlobals->frametime;
 	if ( m_flNextAttack < -0.001 )
 		m_flNextAttack = -0.001;
-	
-	if ( m_flNextAmmoBurn != 1000 )
-	{
-		m_flNextAmmoBurn -= gpGlobals->frametime;
-		
-		if ( m_flNextAmmoBurn < -0.001 )
-			m_flNextAmmoBurn = -0.001;
-	}
-
-	if ( m_flAmmoStartCharge != 1000 )
-	{
-		m_flAmmoStartCharge -= gpGlobals->frametime;
-		
-		if ( m_flAmmoStartCharge < -0.001 )
-			m_flAmmoStartCharge = -0.001;
-	}
-	
-
 #else
 	return;
 #endif
@@ -2758,6 +2972,7 @@ ReturnSpot:
 	return pSpot->edict();
 }
 
+
 void CBasePlayer::Spawn( void )
 {
 	pev->classname		= MAKE_STRING("player");
@@ -2767,8 +2982,7 @@ void CBasePlayer::Spawn( void )
 	pev->solid			= SOLID_SLIDEBOX;
 	pev->movetype		= MOVETYPE_WALK;
 	pev->max_health		= pev->health;
-	pev->flags		   &= FL_PROXY;	// keep proxy flag sey by engine
-	pev->flags		   |= FL_CLIENT;
+	pev->flags			= FL_CLIENT;
 	pev->air_finished	= gpGlobals->time + 12;
 	pev->dmg			= 2;				// initial water damage
 	pev->effects		= 0;
@@ -2785,7 +2999,7 @@ void CBasePlayer::Spawn( void )
 	g_engfuncs.pfnSetPhysicsKeyValue( edict(), "slj", "0" );
 	g_engfuncs.pfnSetPhysicsKeyValue( edict(), "hl", "1" );
 
-	pev->fov = m_iFOV				= 0;// init field of view.
+	m_iFOV				= 0;// init field of view.
 	m_iClientFOV		= -1; // make sure fov reset is sent
 
 	m_flNextDecalTime	= 0;// let this player decal as soon as he spawns.
@@ -2845,8 +3059,10 @@ void CBasePlayer::Spawn( void )
 	}
 
 	m_lastx = m_lasty = 0;
-	
-	m_flNextChatTime = gpGlobals->time;
+
+// START BOT
+   pBotCam = NULL;
+// END BOT
 
 	g_pGameRules->PlayerSpawn( this );
 }
@@ -2945,8 +3161,7 @@ int CBasePlayer::Restore( CRestore &restore )
 	if ( FBitSet(pev->flags, FL_DUCKING) ) 
 	{
 		// Use the crouch HACK
-		//FixPlayerCrouchStuck( edict() );
-		// Don't need to do this with new player prediction code.
+		// FixPlayerCrouchStuck( edict() );
 		UTIL_SetSize(pev, VEC_DUCK_HULL_MIN, VEC_DUCK_HULL_MAX);
 	}
 	else
@@ -2954,25 +3169,7 @@ int CBasePlayer::Restore( CRestore &restore )
 		UTIL_SetSize(pev, VEC_HULL_MIN, VEC_HULL_MAX);
 	}
 
-	g_engfuncs.pfnSetPhysicsKeyValue( edict(), "hl", "1" );
-
-	if ( m_fLongJump )
-	{
-		g_engfuncs.pfnSetPhysicsKeyValue( edict(), "slj", "1" );
-	}
-	else
-	{
-		g_engfuncs.pfnSetPhysicsKeyValue( edict(), "slj", "0" );
-	}
-
 	RenewItems();
-
-#if defined( CLIENT_WEAPONS )
-	// HACK:	This variable is saved/restored in CBaseMonster as a time variable, but we're using it
-	//			as just a counter.  Ideally, this needs its own variable that's saved as a plain float.
-	//			Barring that, we clear it out here instead of using the incorrect restored time value.
-	m_flNextAttack = UTIL_WeaponTimeBase();
-#endif
 
 	return status;
 }
@@ -3323,7 +3520,6 @@ void CBasePlayer :: ForceClientDllUpdate( void )
 	m_iTrain |= TRAIN_NEW;  // Force new train message.
 	m_fWeapon = FALSE;          // Force weapon send
 	m_fKnownItem = FALSE;    // Force weaponinit messages.
-	m_fInitHUD = TRUE;		// Force HUD gmsgResetHUD message
 
 	// Now force all the necessary messages
 	//  to be sent.
@@ -3397,13 +3593,15 @@ void CBasePlayer::ImpulseCommands( )
 
 		if ( tr.flFraction != 1.0 )
 		{// line hit something, so paint a decal
-			m_flNextDecalTime = gpGlobals->time + decalfrequency.value;
+			m_flNextDecalTime = gpGlobals->time + CVAR_GET_FLOAT("decalfrequency");
 			CSprayCan *pCan = GetClassPtr((CSprayCan *)NULL);
 			pCan->Spawn( pev );
 		}
 
 		break;
-
+	case    204:  //  Demo recording, update client dll specific data again.
+		ForceClientDllUpdate(); 
+		break;
 	default:
 		// check all of the cheat impulse commands now
 		CheatImpulseCommands( iImpulse );
@@ -3661,7 +3859,7 @@ int CBasePlayer::RemovePlayerItem( CBasePlayerItem *pItem )
 		ResetAutoaim( );
 		pItem->Holster( );
 		pItem->pev->nextthink = 0;// crowbar may be trying to swing again, etc.
-		pItem->ResetThink( );
+		pItem->ResetThink();
 		m_pActiveItem = NULL;
 		pev->viewmodel = 0;
 		pev->weaponmodel = 0;
@@ -3732,8 +3930,6 @@ int CBasePlayer :: GiveAmmo( int iCount, char *szName, int iMax )
 		MESSAGE_END();
 	}
 
-	TabulateAmmo();
-
 	return i;
 }
 
@@ -3778,7 +3974,7 @@ void CBasePlayer::ItemPostFrame()
 	if ( m_pTank != NULL )
 		return;
 
-#if defined( CLIENT_WEAPONS )
+ #if defined( CLIENT_WEAPONS )
     if ( m_flNextAttack > 0 )
 #else
     if ( gpGlobals->time < m_flNextAttack )
@@ -3880,10 +4076,7 @@ void CBasePlayer :: UpdateClientData( void )
 				FireTargets( "game_playerjoin", this, this, USE_TOGGLE, 0 );
 			}
 		}
-
 		FireTargets( "game_playerspawn", this, this, USE_TOGGLE, 0 );
-
-		InitStatusBar();
 	}
 
 	if ( m_iHideHUD != m_iClientHideHUD )
@@ -4076,13 +4269,6 @@ void CBasePlayer :: UpdateClientData( void )
 	// Cache and client weapon change
 	m_pClientActiveItem = m_pActiveItem;
 	m_iClientFOV = m_iFOV;
-
-	// Update Status Bar
-	if ( m_flNextSBarUpdateTime < gpGlobals->time )
-	{
-		UpdateStatusBar();
-		m_flNextSBarUpdateTime = gpGlobals->time + 0.2;
-	}
 }
 
 
@@ -4222,7 +4408,7 @@ Vector CBasePlayer :: GetAutoaimVector( float flDelta )
 	// m_vecAutoAim = m_vecAutoAim * 0.99;
 
 	// Don't send across network if sv_aim is 0
-	if ( g_psv_aim->value != 0 )
+	if ( CVAR_GET_FLOAT( "sv_aim" ) != 0 )
 	{
 		if ( m_vecAutoAim.x != m_lastx ||
 			 m_vecAutoAim.y != m_lasty )
@@ -4250,7 +4436,7 @@ Vector CBasePlayer :: AutoaimDeflection( Vector &vecSrc, float flDist, float flD
 	edict_t		*bestent;
 	TraceResult tr;
 
-	if ( g_psv_aim->value == 0 )
+	if ( CVAR_GET_FLOAT("sv_aim") == 0 )
 	{
 		m_fOnTarget = FALSE;
 		return g_vecZero;
@@ -4411,7 +4597,7 @@ int CBasePlayer :: GetCustomDecalFrames( void )
 //=========================================================
 void CBasePlayer::DropPlayerItem ( char *pszItemName )
 {
-	if ( !g_pGameRules->IsMultiplayer() || (weaponstay.value > 0) )
+	if ( !g_pGameRules->IsMultiplayer() || (CVAR_GET_FLOAT("mp_weaponstay") > 0) )
 	{
 		// no dropping in single player.
 		return;
@@ -4784,6 +4970,26 @@ void CInfoIntermission::Think ( void )
 		pev->v_angle.x = -pev->v_angle.x;
 	}
 }
+/*
+===========
+TabulateAmmo
+This function is used to find and store 
+all the ammo we have into the ammo vars.
+============
+*/
+void CBasePlayer::TabulateAmmo()
+{
+       ammo_9mm = AmmoInventory( GetAmmoIndex( "9mm" ) );
+       ammo_357 = AmmoInventory( GetAmmoIndex( "357" ) );
+       ammo_argrens = AmmoInventory( GetAmmoIndex( "ARgrenades" ) );
+       ammo_bolts = AmmoInventory( GetAmmoIndex( "bolts" ) );
+       ammo_buckshot = AmmoInventory( GetAmmoIndex( "buckshot" ) );
+       ammo_rockets = AmmoInventory( GetAmmoIndex( "rockets" ) );
+       ammo_uranium = AmmoInventory( GetAmmoIndex( "uranium" ) );
+       ammo_hornets = AmmoInventory( GetAmmoIndex( "Hornets" ) );
+}
+
+
 
 LINK_ENTITY_TO_CLASS( info_intermission, CInfoIntermission );
 

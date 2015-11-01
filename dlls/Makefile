@@ -39,7 +39,7 @@ CFLAGS=$(BASE_CFLAGS) -w -m32 -O1
 
 INCLUDEDIRS=-I. -I$(ENGINE_SRCDIR) -I$(COMMON_SRCDIR) -I$(PM_SHARED_SRCDIR) -I$(GAME_SHARED_SRCDIR)
 
-LDFLAGS= -m32
+LDFLAGS= -m32 -Wl,--no-undefined -lm -lstdc++
 
 SHLIBEXT=so
 SHLIBCFLAGS=-fPIC
@@ -123,6 +123,9 @@ OBJ = \
 	$(DLL_OBJDIR)/weapons.o \
 	$(DLL_OBJDIR)/world.o \
 	$(DLL_OBJDIR)/xen.o \
+        $(DLL_OBJDIR)/bot.o \
+        $(DLL_OBJDIR)/bot_combat.o \
+        $(DLL_OBJDIR)/botcam.o \
 	$(WPN_SHARED_OBJDIR)/hl_wpn_glock.o \
 	$(GAME_SHARED_OBJDIR)/voice_gamemgr.o \
 	$(PM_SHARED_OBJDIR)/pm_debug.o \

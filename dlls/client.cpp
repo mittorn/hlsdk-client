@@ -1,6 +1,6 @@
 /***
 *
-*	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
+*	Copyright (c) 1999, 2000 Valve LLC. All rights reserved.
 *	
 *	This product contains software technology licensed from Id 
 *	Software, Inc. ("Id Technology").  Id Technology (c) 1996 Id Software, Inc. 
@@ -32,13 +32,26 @@
 #include "client.h"
 #include "soundent.h"
 #include "gamerules.h"
-#include "game.h"
 #include "customentity.h"
 #include "weapons.h"
 #include "weaponinfo.h"
 #include "usercmd.h"
 #include "netadr.h"
 #include <ctype.h>
+
+// START BOT
+#include "bot.h"
+#include "botcam.h"
+
+void BotCreate(const char *skin, const char *name, const char *skill);
+extern int f_Observer;  // flag for observer mode
+extern int f_botskill;  // default bot skill level
+extern int f_botdontshoot;  // flag to disable targeting other bots
+extern respawn_t bot_respawn[32];
+float bot_check_time = 10.0;
+int min_bots = 0;
+int max_bots = 0;
+// END BOT
 
 extern DLL_GLOBAL ULONG		g_ulModelIndexPlayer;
 extern DLL_GLOBAL BOOL		g_fGameOver;
@@ -49,10 +62,7 @@ extern void CopyToBodyQue(entvars_t* pev);
 extern int giPrecacheGrunt;
 extern int gmsgSayText;
 
-extern int g_teamplay;
-
 void LinkUserMessages( void );
-
 /*
  * used by kill command and disconnect command
  * ROBIN: Moved here from player.cpp, to allow multiple player models
@@ -79,6 +89,43 @@ called when a player connects to a server
 */
 BOOL ClientConnect( edict_t *pEntity, const char *pszName, const char *pszAddress, char szRejectReason[ 128 ]  )
 {	
+   int i;
+   int count = 0;
+
+   // check if this is NOT a bot joining the server...
+   if (strcmp(pszAddress, "127.0.0.1") != 0)
+   {
+      // don't try to add bots for 30 seconds, give client time to get added
+      bot_check_time = gpGlobals->time + 30.0;
+
+      for (i=0; i < 32; i++)
+      {
+         if (bot_respawn[i].is_used)  // count the number of bots in use
+            count++;
+      }
+
+      // if there are currently more than the minimum number of bots running
+      // then kick one of the bots off the server...
+      if ((min_bots != 0) && (count > min_bots))
+      {
+         for (i=0; i < 32; i++)
+         {
+            if (bot_respawn[i].is_used)  // is this slot used?
+            {
+               char cmd[40];
+
+               sprintf(cmd, "kick \"%s\"\n", bot_respawn[i].name);
+
+               bot_respawn[i].state = BOT_IDLE;
+
+               SERVER_COMMAND(cmd);  // kick the bot using (kick "name")
+
+               break;
+            }
+         }
+      }
+   }
+
 	return g_pGameRules->ClientConnected( pEntity, pszName, pszAddress, szRejectReason );
 
 // a client connecting during an intermission can cause problems
@@ -194,14 +241,11 @@ void ClientPutInServer( edict_t *pEntity )
 	pPlayer->SetCustomDecalFrames(-1); // Assume none;
 
 	// Allocate a CBasePlayer for pev, and call spawn
-	pPlayer->Spawn() ;
+	pPlayer->Spawn();
 
 	// Reset interpolation during first frame
 	pPlayer->pev->effects |= EF_NOINTERP;
 }
-
-#include "voice_gamemgr.h"
-extern CVoiceGameMgr g_VoiceGameMgr;
 
 //// HOST_SAY
 // String comes in as
@@ -223,13 +267,6 @@ void Host_Say( edict_t *pEntity, int teamonly )
 	// We can get a raw string now, without the "say " prepended
 	if ( CMD_ARGC() == 0 )
 		return;
-
-	entvars_t *pev = &pEntity->v;
-	CBasePlayer* player = GetClassPtr((CBasePlayer *)pev);
-
-	//Not yet.
-	if ( player->m_flNextChatTime > gpGlobals->time )
-		 return;
 
 	if ( !stricmp( pcmd, cpSay) || !stricmp( pcmd, cpSayTeam ) )
 	{
@@ -289,9 +326,6 @@ void Host_Say( edict_t *pEntity, int teamonly )
 	strcat( text, p );
 	strcat( text, "\n" );
 
-
-	player->m_flNextChatTime = gpGlobals->time + CHAT_INTERVAL;
-
 	// loop through all players
 	// Start with the first player.
 	// This may return the world in single player if the client types something between levels or during spawn
@@ -307,10 +341,6 @@ void Host_Say( edict_t *pEntity, int teamonly )
 			continue;
 
 		if ( !(client->IsNetClient()) )	// Not a client ? (should never be true)
-			continue;
-
-		// can the receiver hear the sender? or has he muted him?
-		if ( g_VoiceGameMgr.PlayerHasBlockedPlayer( client, player ) )
 			continue;
 
 		if ( teamonly && g_pGameRules->PlayerRelationship(client, CBaseEntity::Instance(pEntity)) != GR_TEAMMATE )
@@ -331,34 +361,6 @@ void Host_Say( edict_t *pEntity, int teamonly )
 
 	// echo to server console
 	g_engfuncs.pfnServerPrint( text );
-
-	char * temp;
-	if ( teamonly )
-		temp = "say_team";
-	else
-		temp = "say";
-	
-	// team match?
-	if ( g_teamplay )
-	{
-		UTIL_LogPrintf( "\"%s<%i><%s><%s>\" %s \"%s\"\n", 
-			STRING( pEntity->v.netname ), 
-			GETPLAYERUSERID( pEntity ),
-			GETPLAYERAUTHID( pEntity ),
-			g_engfuncs.pfnInfoKeyValue( g_engfuncs.pfnGetInfoKeyBuffer( pEntity ), "model" ),
-			temp,
-			p );
-	}
-	else
-	{
-		UTIL_LogPrintf( "\"%s<%i><%s><%i>\" %s \"%s\"\n", 
-			STRING( pEntity->v.netname ), 
-			GETPLAYERUSERID( pEntity ),
-			GETPLAYERAUTHID( pEntity ),
-			GETPLAYERUSERID( pEntity ),
-			temp,
-			p );
-	}
 }
 
 
@@ -389,10 +391,6 @@ void ClientCommand( edict_t *pEntity )
 	else if ( FStrEq(pcmd, "say_team" ) )
 	{
 		Host_Say( pEntity, 1 );
-	}
-	else if ( FStrEq(pcmd, "fullupdate" ) )
-	{
-		GetClassPtr((CBasePlayer *)pev)->ForceClientDllUpdate(); 
 	}
 	else if ( FStrEq(pcmd, "give" ) )
 	{
@@ -431,13 +429,132 @@ void ClientCommand( edict_t *pEntity )
 	{
 		GetClassPtr((CBasePlayer *)pev)->SelectLastItem();
 	}
-	else if ( FStrEq( pcmd, "spectate" ) && (pev->flags & FL_PROXY) )	// added for proxy support
-	{
-		CBasePlayer * pPlayer = GetClassPtr((CBasePlayer *)pev);
+   // START BOT
+   else if (FStrEq(pcmd, "addbot" ))
+   {
+      if (!IS_DEDICATED_SERVER())
+      {
+         //If user types "addbot" in console, add a bot with skin and name
+         BotCreate(CMD_ARGV(1), CMD_ARGV(2), CMD_ARGV(3));
+      }
+      else
+         CLIENT_PRINTF( pEntity, print_console, "addbot not allowed from client!\n" );
+   }
+   else if ( FStrEq(pcmd, "observer" ) )
+   {
+      if (!IS_DEDICATED_SERVER())
+      {
+         if (CMD_ARGC() > 1)  // is there an argument to the command?
+         {
+            f_Observer = atoi( CMD_ARGV(1) );  // set observer flag
+            CLIENT_PRINTF( pEntity, print_console, UTIL_VarArgs("\"observer\" set to %d\n", (int)f_Observer) );
+         }
+         else
+         {
+            CLIENT_PRINTF( pEntity, print_console, UTIL_VarArgs("\"observer\" is %d\n", (int)f_Observer) );
+         }
+      }
+      else
+         CLIENT_PRINTF( pEntity, print_console, "observer not allowed from client!\n" );
+   }
+   else if ( FStrEq(pcmd, "botskill" ) )
+   {
+      if (!IS_DEDICATED_SERVER())
+      {
+         if (CMD_ARGC() > 1)
+         {
+            f_botskill = atoi( CMD_ARGV(1) );  // set default bot skill level
+            CLIENT_PRINTF( pEntity, print_console, UTIL_VarArgs("\"botskill\" set to %d\n", (int)f_botskill) );
+         }
+         else
+         {
+            CLIENT_PRINTF( pEntity, print_console, UTIL_VarArgs("\"botskill\" is %d\n", (int)f_botskill) );
+         }
+      }
+      else
+         CLIENT_PRINTF( pEntity, print_console, "botskill not allowed from client!\n" );
+   }
+   else if ( FStrEq(pcmd, "botdontshoot" ) )
+   {
+      if (!IS_DEDICATED_SERVER())
+      {
+         if (CMD_ARGC() > 1)  // is there an argument to the command?
+         {
+            f_botdontshoot = atoi( CMD_ARGV(1) );  // set bot shoot flag
+            CLIENT_PRINTF( pEntity, print_console, UTIL_VarArgs("\"botdontshoot\" set to %d\n", (int)f_botdontshoot) );
+         }
+         else
+         {
+            CLIENT_PRINTF( pEntity, print_console, UTIL_VarArgs("\"botdontshoot\" is %d\n", (int)f_botdontshoot) );
+         }
+      }
+      else
+         CLIENT_PRINTF( pEntity, print_console, "botdontshoot not allowed from client!\n" );
+   }
+   else if (FStrEq(pcmd, "botcam" ))
+   {
+      CBasePlayer *pPlayer = GetClassPtr((CBasePlayer *)pev);
+      CBasePlayer *pBot = NULL;
+      char botname[BOT_NAME_LEN+1];
+      int index;
 
-		edict_t *pentSpawnSpot = g_pGameRules->GetPlayerSpawnSpot( pPlayer );
-		pPlayer->StartObserver( pev->origin, VARS(pentSpawnSpot)->angles);
-	}
+      botname[0] = 0;
+
+      if (CMD_ARGC() > 1)  // is there an argument to the command?
+      {
+         if (strstr(CMD_ARGV(1), "\"") == NULL)
+            strcpy(botname, CMD_ARGV(1));
+         else
+            sscanf(CMD_ARGV(1), "\"%s\"", &botname[0]);
+
+         index = 0;
+
+         while (index < 32)
+         {
+            if ((bot_respawn[index].is_used) &&
+                (stricmp(bot_respawn[index].name, botname) == 0))
+               break;
+            else
+               index++;
+         }
+
+         if (index < 32)
+            pBot = bot_respawn[index].pBot;
+      }
+      else
+      {
+         index = 0;
+
+         while ((bot_respawn[index].is_used == FALSE) && (index < 32))
+            index++;
+
+         if (index < 32)
+            pBot = bot_respawn[index].pBot;
+      }
+
+      if (pBot == NULL)
+      {
+         if (botname[0])
+            CLIENT_PRINTF( pEntity, print_console, UTIL_VarArgs("there is no bot named \"%s\"!\n", botname) );
+         else
+            CLIENT_PRINTF( pEntity, print_console, UTIL_VarArgs("there are no bots!\n") );
+      }
+      else
+      {
+         if (pPlayer->pBotCam)  // if botcam in use, disconnect first...
+            pPlayer->pBotCam->Disconnect();
+
+         pPlayer->pBotCam = CBotCam::Create(pPlayer, pBot);
+      }
+   }
+   else if (FStrEq(pcmd, "nobotcam" ))
+   {
+      CBasePlayer *pPlayer = GetClassPtr((CBasePlayer *)pev);
+
+      if (pPlayer->pBotCam)
+         pPlayer->pBotCam->Disconnect();
+   }
+   //END BOT
 	else if ( g_pGameRules->ClientCommand( GetClassPtr((CBasePlayer *)pev), pcmd ) )
 	{
 		// MenuSelect returns true only if the command is properly handled,  so don't print a warning
@@ -445,15 +562,7 @@ void ClientCommand( edict_t *pEntity )
 	else
 	{
 		// tell the user they entered an unknown command
-		char command[128];
-
-		// check the length of the command (prevents crash)
-		// max total length is 192 ...and we're adding a string below ("Unknown command: %s\n")
-		strncpy( command, pcmd, 127 );
-		command[127] = '\0';
-
-		// tell the user they entered an unknown command
-		ClientPrint( &pEntity->v, HUD_PRINTCONSOLE, UTIL_VarArgs( "Unknown command: %s\n", command ) );
+		ClientPrint( &pEntity->v, HUD_PRINTCONSOLE, UTIL_VarArgs( "Unknown command: %s\n", pcmd ) );
 	}
 }
 
@@ -476,22 +585,6 @@ void ClientUserInfoChanged( edict_t *pEntity, char *infobuffer )
 	// msg everyone if someone changes their name,  and it isn't the first time (changing no name to current name)
 	if ( pEntity->v.netname && STRING(pEntity->v.netname)[0] != 0 && !FStrEq( STRING(pEntity->v.netname), g_engfuncs.pfnInfoKeyValue( infobuffer, "name" )) )
 	{
-		char sName[256];
-		char *pName = g_engfuncs.pfnInfoKeyValue( infobuffer, "name" );
-		strncpy( sName, pName, sizeof(sName) - 1 );
-		sName[ sizeof(sName) - 1 ] = '\0';
-
-		// First parse the name and remove any %'s
-		for ( char *pApersand = sName; pApersand != NULL && *pApersand != 0; pApersand++ )
-		{
-			// Replace it with a space
-			if ( *pApersand == '%' )
-				*pApersand = ' ';
-		}
-
-		// Set the name
-		g_engfuncs.pfnSetClientKeyValue( ENTINDEX(pEntity), infobuffer, "name", sName );
-
 		char text[256];
 		sprintf( text, "* %s changed name to %s\n", STRING(pEntity->v.netname), g_engfuncs.pfnInfoKeyValue( infobuffer, "name" ) );
 		MESSAGE_BEGIN( MSG_ALL, gmsgSayText, NULL );
@@ -499,25 +592,7 @@ void ClientUserInfoChanged( edict_t *pEntity, char *infobuffer )
 			WRITE_STRING( text );
 		MESSAGE_END();
 
-		// team match?
-		if ( g_teamplay )
-		{
-			UTIL_LogPrintf( "\"%s<%i><%s><%s>\" changed name to \"%s\"\n", 
-				STRING( pEntity->v.netname ), 
-				GETPLAYERUSERID( pEntity ), 
-				GETPLAYERAUTHID( pEntity ),
-				g_engfuncs.pfnInfoKeyValue( infobuffer, "model" ), 
-				g_engfuncs.pfnInfoKeyValue( infobuffer, "name" ) );
-		}
-		else
-		{
-			UTIL_LogPrintf( "\"%s<%i><%s><%i>\" changed name to \"%s\"\n", 
-				STRING( pEntity->v.netname ), 
-				GETPLAYERUSERID( pEntity ), 
-				GETPLAYERAUTHID( pEntity ),
-				GETPLAYERUSERID( pEntity ), 
-				g_engfuncs.pfnInfoKeyValue( infobuffer, "name" ) );
-		}
+		UTIL_LogPrintf( "\"%s<%i>\" changed name to \"%s<%i>\"\n", STRING( pEntity->v.netname ), GETPLAYERUSERID( pEntity ), g_engfuncs.pfnInfoKeyValue( infobuffer, "name" ), GETPLAYERUSERID( pEntity ) );
 	}
 
 	g_pGameRules->ClientUserInfoChanged( GetClassPtr((CBasePlayer *)&pEntity->v), infobuffer );
@@ -629,14 +704,412 @@ void ParmsChangeLevel( void )
 //
 void StartFrame( void )
 {
+   // START BOT
+   static BOOL file_opened = FALSE;
+   static int length;
+   static char *pFileList, *aFileList;
+   static char cmd_line[80];
+   static char server_cmd[80];
+   static int index, i;
+   static float pause_time;
+   static float check_server_cmd = 0;
+   char *cmd, *arg1, *arg2, *arg3;
+   static float respawn_time = 0;
+   static float previous_time = 0.0;
+   char msg[120];
+   // END BOT
+
+   // START BOT - thanks Jehannum!
+
+   // loop through all the players...
+   for ( i = 1; i <= gpGlobals->maxClients; i++ )
+   {
+      CBaseEntity *pPlayer;
+
+      pPlayer = UTIL_PlayerByIndex( i );
+
+      if (!pPlayer)  // if invalid then continue with next index...
+         continue;
+
+      // check if this is a FAKECLIENT (i.e. is it a bot?)
+      if (FBitSet(pPlayer->pev->flags, FL_FAKECLIENT))
+      {
+         CBot *pBot = (CBot *)pPlayer;
+
+         // call the think function for the bot...
+         pBot->BotThink();
+      }
+   }
+   // END BOT
+
+   // START BOT
+   if ((g_fGameOver) && (respawn_time < 1.0))
+   {
+      // if the game is over (time/frag limit) set the respawn time...
+      respawn_time = 5.0;
+
+      // check if any players are using the botcam...
+      for ( i = 1; i <= gpGlobals->maxClients; i++ )
+      {
+         CBasePlayer *pPlayer;
+
+         pPlayer = (CBasePlayer *)UTIL_PlayerByIndex( i );
+
+         if (!pPlayer)
+            continue;  // if invalid then continue with next index...
+
+         if (pPlayer->pBotCam)
+            pPlayer->pBotCam->Disconnect();
+      }
+   }
+
+   // check if a map was changed via "map" without kicking bots...
+   if (previous_time > gpGlobals->time)
+   {
+      bot_check_time = gpGlobals->time + 10.0;
+
+      for (index = 0; index < 32; index++)
+      {
+         if ((bot_respawn[index].is_used) &&  // is this slot used?
+             (bot_respawn[index].state != BOT_NEED_TO_RESPAWN))
+         {
+            // bot has already been "kicked" by server so just set flag
+            bot_respawn[index].state = BOT_NEED_TO_RESPAWN;
+
+            // if the map was changed set the respawn time...
+            respawn_time = 5.0;
+         }
+      }
+   }
+
+   // is new game started and time to respawn bots yet?
+   if ((!g_fGameOver) && (respawn_time > 1.0) &&
+       (gpGlobals->time >= respawn_time))
+   {
+      int index = 0;
+
+      bot_check_time = gpGlobals->time + 5.0;
+
+      // find bot needing to be respawned...
+      while ((index < 32) &&
+             (bot_respawn[index].state != BOT_NEED_TO_RESPAWN))
+         index++;
+
+      if (index < 32)
+      {
+         bot_respawn[index].state = BOT_IS_RESPAWNING;
+         bot_respawn[index].is_used = FALSE;      // free up this slot
+
+         // respawn 1 bot then wait a while (otherwise engine crashes)
+         BotCreate(bot_respawn[index].skin,
+                   bot_respawn[index].name,
+                   bot_respawn[index].skill);
+
+         respawn_time = gpGlobals->time + 1.0;  // set next respawn time
+      }
+      else
+      {
+         respawn_time = 0.0;
+      }
+   }
+   // END BOT
+
 	if ( g_pGameRules )
+   {
 		g_pGameRules->Think();
 
+      // START BOT
+      if (!file_opened)  // have we open bot.cfg file yet?
+      {
+         ALERT( at_console, "Executing bot.cfg\n" );
+         pFileList = (char *)LOAD_FILE_FOR_ME( "bot.cfg", &length);
+         file_opened = TRUE;
+         if (pFileList == NULL)
+            ALERT( at_console, "bot.cfg file not found\n" );
+
+         pause_time = gpGlobals->time;
+
+         index = 0;
+         cmd_line[index] = 0;  // null out command line
+      }
+
+      // if the bot.cfg file is still open and time to execute command...
+      while ((pFileList && *pFileList) && (pause_time <= gpGlobals->time))
+      {
+         while (*pFileList == ' ')  // skip any leading blanks
+            pFileList++;
+
+         while ((*pFileList != '\r') && (*pFileList != '\n') &&
+                (*pFileList != 0))
+         {
+            if (*pFileList == '\t')  // convert tabs to spaces
+               *pFileList = ' ';
+
+            cmd_line[index] = *pFileList;
+            pFileList++;
+
+            while ((cmd_line[index] == ' ') && (*pFileList == ' '))
+               pFileList++;  // skip multiple spaces
+
+            index++;
+         }
+
+         if (*pFileList == '\r')
+         {
+            pFileList++; // skip the carriage return
+            pFileList++; // skip the linefeed
+         }
+         else if (*pFileList == '\n')
+         {
+            pFileList++; // skip the newline
+         }
+
+         cmd_line[index] = 0;  // terminate the command line
+
+         // copy the command line to a server command buffer...
+         strcpy(server_cmd, cmd_line);
+         strcat(server_cmd, "\n");
+
+         index = 0;
+         cmd = cmd_line;
+         arg1 = arg2 = arg3 = NULL;
+
+         // skip to blank or end of string...
+         while ((cmd_line[index] != ' ') && (cmd_line[index] != 0))
+            index++;
+
+         if (cmd_line[index] == ' ')
+         {
+            cmd_line[index++] = 0;
+            arg1 = &cmd_line[index];
+
+            // skip to blank or end of string...
+            while ((cmd_line[index] != ' ') && (cmd_line[index] != 0))
+               index++;
+
+            if (cmd_line[index] == ' ')
+            {
+               cmd_line[index++] = 0;
+               arg2 = &cmd_line[index];
+
+               // skip to blank or end of string...
+               while ((cmd_line[index] != ' ') && (cmd_line[index] != 0))
+                  index++;
+
+               if (cmd_line[index] == ' ')
+               {
+                  cmd_line[index++] = 0;
+                  arg3 = &cmd_line[index];
+               }
+            }
+         }
+
+         index = 0;  // reset for next input line
+
+         if ((cmd_line[0] == '#') || (cmd_line[0] == 0))
+         {
+            continue;  // ignore comments or blank lines
+         }
+         else if (strcmp(cmd, "addbot") == 0)
+         {
+            BotCreate( arg1, arg2, arg3 );
+
+            // have to delay here or engine gives "Tried to write to
+            // uninitialized sizebuf_t" error and crashes...
+
+            pause_time = gpGlobals->time + 1;
+
+            break;
+         }
+         else if (strcmp(cmd, "botskill") == 0)
+         {
+            f_botskill = atoi( arg1 );  // set default bot skill level
+         }
+         else if (strcmp(cmd, "observer") == 0)
+         {
+            f_Observer = atoi( arg1 );  // set observer flag
+         }
+         else if (strcmp(cmd, "botdontshoot") == 0)
+         {
+            f_botdontshoot = atoi( arg1 );  // set bot shoot flag
+         }
+         else if (strcmp(cmd, "min_bots") == 0)
+         {
+            min_bots = atoi( arg1 );
+
+            if (min_bots < 0)
+               min_bots = 0;
+
+            if (IS_DEDICATED_SERVER())
+            {
+               sprintf(msg, "min_bots set to %d\n", min_bots);
+               printf(msg);
+            }
+         }
+         else if (strcmp(cmd, "max_bots") == 0)
+         {
+            max_bots = atoi( arg1 );
+
+            if (max_bots >= gpGlobals->maxClients)
+               max_bots = gpGlobals->maxClients - 1;
+
+            if (IS_DEDICATED_SERVER())
+            {
+               sprintf(msg, "max_bots set to %d\n", max_bots);
+               printf(msg);
+            }
+         }
+         else if (strcmp(cmd, "pause") == 0)
+         {
+            pause_time = gpGlobals->time + atoi( arg1 );
+            break;
+         }
+         else
+         {
+            sprintf(msg, "executing server command: %s\n", server_cmd);
+            ALERT( at_console, msg );
+
+            if (IS_DEDICATED_SERVER())
+               printf(msg);
+
+            SERVER_COMMAND(server_cmd);
+         }
+      }
+
+      // if bot.cfg file is open and reached end of file, then close and free it
+      if (pFileList && (*pFileList == 0))
+      {
+         FREE_FILE(aFileList);
+         pFileList = NULL;
+      }
+
+      // if time to check for server commands then do so...
+      if (check_server_cmd <= gpGlobals->time)
+      {
+         check_server_cmd = gpGlobals->time + 1.0;
+
+         char *cvar_bot = (char *)CVAR_GET_STRING( "bot" );
+
+         if ( cvar_bot && cvar_bot[0] )
+         {
+            strcpy(cmd_line, cvar_bot);
+
+            index = 0;
+            cmd = cmd_line;
+            arg1 = arg2 = arg3 = NULL;
+
+            // skip to blank or end of string...
+            while ((cmd_line[index] != ' ') && (cmd_line[index] != 0))
+               index++;
+
+            if (cmd_line[index] == ' ')
+            {
+               cmd_line[index++] = 0;
+               arg1 = &cmd_line[index];
+
+               // skip to blank or end of string...
+               while ((cmd_line[index] != ' ') && (cmd_line[index] != 0))
+                  index++;
+
+               if (cmd_line[index] == ' ')
+               {
+                  cmd_line[index++] = 0;
+                  arg2 = &cmd_line[index];
+
+                  // skip to blank or end of string...
+                  while ((cmd_line[index] != ' ') && (cmd_line[index] != 0))
+                     index++;
+
+                  if (cmd_line[index] == ' ')
+                  {
+                     cmd_line[index++] = 0;
+                     arg3 = &cmd_line[index];
+                  }
+               }
+            }
+
+            if (strcmp(cmd, "addbot") == 0)
+            {
+               printf("adding new bot...\n");
+
+               BotCreate( arg1, arg2, arg3 );
+            }
+            else if (strcmp(cmd, "botskill") == 0)
+            {
+               if (arg1 != NULL)
+               {
+                  printf("setting botskill to %d\n", atoi( arg1 ));
+
+                  f_botskill = atoi( arg1 );  // set default bot skill level
+               }
+               else
+                  printf("botskill is %d\n", f_botskill);
+            }
+            else if (strcmp(cmd, "botdontshoot") == 0)
+            {
+               if (arg1 != NULL)
+               {
+                  printf("setting botdontshoot to %d\n", atoi( arg1 ));
+
+                  f_botdontshoot = atoi( arg1 );  // set bot shoot flag
+               }
+               else
+                  printf("botdontshoot is %d\n", f_botdontshoot);
+            }
+
+            CVAR_SET_STRING("bot", "");
+         }
+      }
+      // END BOT
+   }
+
 	if ( g_fGameOver )
+   {
 		return;
 
-	gpGlobals->teamplay = teamplay.value;
+      // START BOT
+      check_server_cmd = 0;
+      // END BOT
+   }
+
+	gpGlobals->teamplay = CVAR_GET_FLOAT("teamplay");
+	g_iSkillLevel = CVAR_GET_FLOAT("skill");
 	g_ulFrameCount++;
+
+   // START BOT
+
+   // check if time to see if a bot needs to be created...
+   if (bot_check_time < gpGlobals->time)
+   {
+      int count = 0;
+
+      bot_check_time = gpGlobals->time + 5.0;
+
+      for ( i = 1; i <= gpGlobals->maxClients; i++ )
+      {
+         CBaseEntity *pPlayer;
+
+         pPlayer = UTIL_PlayerByIndex( i );
+
+         if (!pPlayer)
+            continue;  // if invalid then continue with next index...
+
+         if (pPlayer->pev->takedamage == DAMAGE_NO)
+            continue;  // if bot was kicked, don't count as a player...
+
+         count++;  // count the number of bots and players
+      }
+
+      // if there are currently less than the maximum number of "players"
+      // then add another bot using the default skill level...
+      if (count < max_bots)
+      {
+         BotCreate( NULL, NULL, NULL );
+      }
+   }
+
+   previous_time = gpGlobals->time;  // keep track of last time in StartFrame()
+   // END BOT
 }
 
 
@@ -753,11 +1226,53 @@ void ClientPrecache( void )
 
 	if (giPrecacheGrunt)
 		UTIL_PrecacheOther("monster_human_grunt");
+
+   // START BOT
+   if (!IS_DEDICATED_SERVER())
+   {
+      PRECACHE_SOUND (HG_SND1);
+      PRECACHE_SOUND (HG_SND2);
+      PRECACHE_SOUND (HG_SND3);
+      PRECACHE_SOUND (HG_SND4);
+      PRECACHE_SOUND (HG_SND5);
+
+      PRECACHE_SOUND (BA_SND1);
+      PRECACHE_SOUND (BA_SND2);
+      PRECACHE_SOUND (BA_SND3);
+      PRECACHE_SOUND (BA_SND4);
+      PRECACHE_SOUND (BA_SND5);
+
+      PRECACHE_SOUND (SC_SND1);
+      PRECACHE_SOUND (SC_SND2);
+      PRECACHE_SOUND (SC_SND3);
+      PRECACHE_SOUND (SC_SND4);
+      PRECACHE_SOUND (SC_SND5);
+
+      PRECACHE_SOUND (BA_TNT1);
+      PRECACHE_SOUND (BA_TNT2);
+      PRECACHE_SOUND (BA_TNT3);
+      PRECACHE_SOUND (BA_TNT4);
+      PRECACHE_SOUND (BA_TNT5);
+
+      PRECACHE_SOUND (SC_TNT1);
+      PRECACHE_SOUND (SC_TNT2);
+      PRECACHE_SOUND (SC_TNT3);
+      PRECACHE_SOUND (SC_TNT4);
+      PRECACHE_SOUND (SC_TNT5);
+
+      PRECACHE_SOUND (USE_TEAMPLAY_SND);
+      PRECACHE_SOUND (USE_TEAMPLAY_LATER_SND);
+      PRECACHE_SOUND (USE_TEAMPLAY_ENEMY_SND);
+   }
+
+   UTIL_PrecacheOther( "entity_botcam" );
+   PRECACHE_MODEL( "models/mechgibs.mdl" );
+   // END BOT
 }
 
 /*
 ===============
-GetGameDescription
+const char *GetGameDescription()
 
 Returns the descriptive name of this .dll.  E.g., Half-Life, or Team Fortress 2
 ===============
@@ -872,6 +1387,7 @@ void SpectatorThink( edict_t *pEntity )
 		pPlayer->SpectatorThink( );
 }
 
+
 ////////////////////////////////////////////////////////
 // PAS and PVS routines for client messaging
 //
@@ -899,13 +1415,6 @@ void SetupVisibility( edict_t *pViewEntity, edict_t *pClient, unsigned char **pv
 	if ( pViewEntity )
 	{
 		pView = pViewEntity;
-	}
-
-	if ( pClient->v.flags & FL_PROXY )
-	{
-		*pvs = NULL;	// the spectator proxy sees
-		*pas = NULL;	// and hears everything
-		return;
 	}
 
 	org = pView->v.origin + pView->v.view_ofs;
@@ -1044,7 +1553,6 @@ int AddToFullPack( struct entity_state_s *state, int e, edict_t *ent, edict_t *h
 	state->scale	  = ent->v.scale;
 	state->solid	  = ent->v.solid;
 	state->colormap   = ent->v.colormap;
-
 	state->movetype   = ent->v.movetype;
 	state->sequence   = ent->v.sequence;
 	state->framerate  = ent->v.framerate;
@@ -1063,9 +1571,9 @@ int AddToFullPack( struct entity_state_s *state, int e, edict_t *ent, edict_t *h
 	state->rendermode    = ent->v.rendermode;
 	state->renderamt     = ent->v.renderamt; 
 	state->renderfx      = ent->v.renderfx;
-	state->rendercolor.r = ent->v.rendercolor.x;
-	state->rendercolor.g = ent->v.rendercolor.y;
-	state->rendercolor.b = ent->v.rendercolor.z;
+	state->rendercolor.r = ent->v.rendercolor[0];
+	state->rendercolor.g = ent->v.rendercolor[1];
+	state->rendercolor.b = ent->v.rendercolor[2];
 
 	state->aiment = 0;
 	if ( ent->v.aiment )
@@ -1104,7 +1612,7 @@ int AddToFullPack( struct entity_state_s *state, int e, edict_t *ent, edict_t *h
 
 		state->gravity      = ent->v.gravity;
 //		state->team			= ent->v.team;
-//		
+//		state->playerclass  = ent->v.playerclass;
 		state->usehull      = ( ent->v.flags & FL_DUCKING ) ? 1 : 0;
 		state->health		= ent->v.health;
 	}
@@ -1132,9 +1640,9 @@ void CreateBaseline( int player, int eindex, struct entity_state_s *baseline, st
 	// render information
 	baseline->rendermode	= (byte)entity->v.rendermode;
 	baseline->renderamt		= (byte)entity->v.renderamt;
-	baseline->rendercolor.r	= (byte)entity->v.rendercolor.x;
-	baseline->rendercolor.g	= (byte)entity->v.rendercolor.y;
-	baseline->rendercolor.b	= (byte)entity->v.rendercolor.z;
+	baseline->rendercolor.r	= (byte)entity->v.rendercolor[0];
+	baseline->rendercolor.g	= (byte)entity->v.rendercolor[1];
+	baseline->rendercolor.b	= (byte)entity->v.rendercolor[2];
 	baseline->renderfx		= (byte)entity->v.renderfx;
 
 	if ( player )
@@ -1213,6 +1721,7 @@ FIXME:  Move to script
 void Entity_Encode( struct delta_s *pFields, const unsigned char *from, const unsigned char *to )
 {
 	entity_state_t *f, *t;
+
 	int localplayer = 0;
 	static int initialized = 0;
 
@@ -1459,7 +1968,7 @@ int GetWeaponData( struct edict_s *player, struct weapon_data_s *info )
 					if ( II.iId >= 0 && II.iId < 32 )
 					{
 						item = &info[ II.iId ];
-					 	
+						
 						item->m_iId						= II.iId;
 						item->m_iClip					= gun->m_iClip;
 
@@ -1467,16 +1976,6 @@ int GetWeaponData( struct edict_s *player, struct weapon_data_s *info )
 						item->m_flNextPrimaryAttack		= max( gun->m_flNextPrimaryAttack, -0.001 );
 						item->m_flNextSecondaryAttack	= max( gun->m_flNextSecondaryAttack, -0.001 );
 						item->m_fInReload				= gun->m_fInReload;
-						item->m_fInSpecialReload		= gun->m_fInSpecialReload;
-						item->fuser1					= max( gun->pev->fuser1, -0.001 );
-						item->fuser2					= gun->m_flStartThrow;
-						item->fuser3					= gun->m_flReleaseThrow;
-						item->iuser1					= gun->m_chargeReady;
-						item->iuser2					= gun->m_fInAttack;
-						item->iuser3					= gun->m_fireState;
-						
-											
-//						item->m_flPumpTime				= max( gun->m_flPumpTime, -0.001 );
 					}
 				}
 				pPlayerItem = pPlayerItem->m_pNext;
@@ -1503,7 +2002,6 @@ void UpdateClientData ( const struct edict_s *ent, int sendweapons, struct clien
 	cd->health			= ent->v.health;
 
 	cd->viewmodel		= MODEL_INDEX( STRING( ent->v.viewmodel ) );
-
 	cd->waterlevel		= ent->v.waterlevel;
 	cd->watertype		= ent->v.watertype;
 	cd->weapons			= ent->v.weapons;
@@ -1537,17 +2035,6 @@ void UpdateClientData ( const struct edict_s *ent, int sendweapons, struct clien
 		if ( pl )
 		{
 			cd->m_flNextAttack	= pl->m_flNextAttack;
-			cd->fuser2			= pl->m_flNextAmmoBurn;
-			cd->fuser3			= pl->m_flAmmoStartCharge;
-			cd->vuser1.x		= pl->ammo_9mm;
-			cd->vuser1.y		= pl->ammo_357;
-			cd->vuser1.z		= pl->ammo_argrens;
-			cd->ammo_nails		= pl->ammo_bolts;
-			cd->ammo_shells		= pl->ammo_buckshot;
-			cd->ammo_rockets	= pl->ammo_rockets;
-			cd->ammo_cells		= pl->ammo_uranium;
-			cd->vuser2.x		= pl->ammo_hornets;
-			
 
 			if ( pl->m_pActiveItem )
 			{
@@ -1560,17 +2047,6 @@ void UpdateClientData ( const struct edict_s *ent, int sendweapons, struct clien
 					gun->GetItemInfo( &II );
 
 					cd->m_iId = II.iId;
-
-					cd->vuser3.z	= gun->m_iSecondaryAmmoType;
-					cd->vuser4.x	= gun->m_iPrimaryAmmoType;
-					cd->vuser4.y	= pl->m_rgAmmo[gun->m_iPrimaryAmmoType];
-					cd->vuser4.z	= pl->m_rgAmmo[gun->m_iSecondaryAmmoType];
-					
-					if ( pl->m_pActiveItem->m_iId == WEAPON_RPG )
-					{
-						cd->vuser2.y = ( ( CRpg * )pl->m_pActiveItem)->m_fSpotActive;
-						cd->vuser2.z = ( ( CRpg * )pl->m_pActiveItem)->m_cActiveRockets;
-					}
 				}
 			}
 		}
@@ -1733,5 +2209,6 @@ AllowLagCompensation
 */
 int AllowLagCompensation( void )
 {
-	return 1;
+	return 0;
 }
+

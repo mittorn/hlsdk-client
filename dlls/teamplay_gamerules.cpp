@@ -80,7 +80,7 @@ void CHalfLifeTeamplay :: Think ( void )
 	int frags_remaining = 0;
 	int time_remaining = 0;
 
-	g_VoiceGameMgr.Update(gpGlobals->frametime);
+//	g_VoiceGameMgr.Update(gpGlobals->frametime);
 
 	if ( g_fGameOver )   // someone else quit the game already
 	{
@@ -145,8 +145,8 @@ void CHalfLifeTeamplay :: Think ( void )
 //=========================================================
 BOOL CHalfLifeTeamplay :: ClientCommand( CBasePlayer *pPlayer, const char *pcmd )
 {
-	if(g_VoiceGameMgr.ClientCommand(pPlayer, pcmd))
-		return TRUE;
+//	if(g_VoiceGameMgr.ClientCommand(pPlayer, pcmd))
+//		return TRUE;
 
 	if ( FStrEq( pcmd, "menuselect" ) )
 	{
@@ -216,14 +216,14 @@ void CHalfLifeTeamplay::InitHUD( CBasePlayer *pPlayer )
 	CHalfLifeMultiplay::InitHUD( pPlayer );
 
 	// Send down the team names
-	MESSAGE_BEGIN( MSG_ONE, gmsgTeamNames, NULL, pPlayer->edict() );  
+/*	MESSAGE_BEGIN( MSG_ONE, gmsgTeamNames, NULL, pPlayer->edict() );  
 		WRITE_BYTE( num_teams );
 		for ( i = 0; i < num_teams; i++ )
 		{
 			WRITE_STRING( team_names[ i ] );
 		}
 	MESSAGE_END();
-
+  */
 	RecountTeams();
 
 	char *mdls = g_engfuncs.pfnInfoKeyValue( g_engfuncs.pfnGetInfoKeyBuffer( pPlayer->edict() ), "model" );
