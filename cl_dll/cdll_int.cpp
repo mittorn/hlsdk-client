@@ -30,6 +30,7 @@ extern "C"
 #include <string.h>
 #include "hud_servers.h"
 #include "interface.h"
+#include "mobility_int.h"
 
 #ifdef _WIN32
 #define DLLEXPORT __declspec( dllexport )
@@ -38,6 +39,7 @@ extern "C"
 #endif
 
 cl_enginefunc_t gEngfuncs;
+mobile_engfuncs_t *gMobileEngfuncs = NULL;
 CHud gHUD;
 
 void InitInput (void);
@@ -67,6 +69,7 @@ int		DLLEXPORT HUD_GetHullBounds( int hullnumber, float *mins, float *maxs );
 void	DLLEXPORT HUD_Frame( double time );
 void	DLLEXPORT HUD_VoiceStatus(int entindex, qboolean bTalking);
 void	DLLEXPORT HUD_DirectorMessage( int iSize, void *pbuf );
+void    DLLEXPORT HUD_MobilityInterface( mobile_engfuncs_t *gpMobileEngfuncs );
 }
 
 /*
@@ -283,4 +286,11 @@ void DLLEXPORT HUD_DirectorMessage( int iSize, void *pbuf )
 	 gHUD.m_Spectator.DirectorMessage( iSize, pbuf );
 }
 
+void    DLLEXPORT HUD_MobilityInterface( mobile_engfuncs_t *gpMobileEngfuncs )
+{
+    if( gpMobileEngfuncs->version != MOBILITY_API_VERSION )
+        return;
+    
+    gMobileEngfuncs = gpMobileEngfuncs;
+}
 
