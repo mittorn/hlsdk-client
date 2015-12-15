@@ -27,7 +27,7 @@ BASE_CFLAGS=	-Dstricmp=strcasecmp -D_strnicmp=strncasecmp -Dstrnicmp=strncasecmp
 		-DCLIENT_WEAPONS -fpermissive
 
 #safe optimization
-CFLAGS=$(BASE_CFLAGS) -w -m32 -O1
+CFLAGS=$(BASE_CFLAGS) -w -m64 -Og -ggdb
 
 #full optimization
 #CFLAGS=$(BASE_CFLAGS) -w -O1 -m486 -ffast-math -funroll-loops \
@@ -39,7 +39,7 @@ CFLAGS=$(BASE_CFLAGS) -w -m32 -O1
 
 INCLUDEDIRS=-I. -I$(ENGINE_SRCDIR) -I$(COMMON_SRCDIR) -I$(PM_SHARED_SRCDIR) -I$(GAME_SHARED_SRCDIR)
 
-LDFLAGS= -m32
+LDFLAGS= -m64
 
 SHLIBEXT=so
 SHLIBCFLAGS=-fPIC

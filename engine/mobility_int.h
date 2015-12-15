@@ -25,20 +25,6 @@ extern "C" {
 
 #define VIBRATE_NORMAL (1 << 0) // just vibrate for given "life"
 
-#define TOUCH_ACT_SHOOT_NAME		"shoot"
-#define TOUCH_ACT_SHOOT_ALT_NAME	"shoot_alt"
-#define TOUCH_ACT_USE_NAME			"use"
-#define TOUCH_ACT_JUMP_NAME			"jump"
-#define TOUCH_ACT_CROUCH_NAME		"crouch"
-#define TOUCH_ACT_RELOAD_NAME		"reload"
-#define TOUCH_ACT_INVPREV_NAME		"prev_weap"
-#define TOUCH_ACT_INVNEXT_NAME		"next_weap"
-#define TOUCH_ACT_LIGHT_NAME		"flash_light_filled"
-#define TOUCH_ACT_QUICKSAVE_NAME	"save"
-#define TOUCH_ACT_QUICKLOAD_NAME	"load"
-#define TOUCH_ACT_SHOW_NUMBERS_NAME "show_weapons"
-#define TOUCH_ACT_NUMBER_NAME(x)	"key_##x"
-
 // these controls are added by engine.
 enum {
 	TOUCH_ACT_SHOOT = 0,
@@ -53,24 +39,29 @@ enum {
 	TOUCH_ACT_QUICKSAVE,
 	TOUCH_ACT_QUICKLOAD,
 	TOUCH_ACT_SHOW_NUMBERS,
-	/*TOUCH_ACT_1,
+	TOUCH_ACT_CHAT,
+	TOUCH_ACT_USERALIAS1,
+	TOUCH_ACT_USERALIAS2,
+	TOUCH_ACT_USERALIAS3,
+	/*TOUCH_ACT_0,
+	TOUCH_ACT_1,
 	TOUCH_ACT_2,
 	TOUCH_ACT_3,
 	TOUCH_ACT_4,
 	TOUCH_ACT_5,
-	TOUCH_ACT_6,			always binded to real keyboard numbers
+	TOUCH_ACT_6,			// numbers always binded to real keyboard numbers
 	TOUCH_ACT_7,
 	TOUCH_ACT_8,
-	TOUCH_ACT_9,
-	TOUCH_ACT_0,*/
-	TOUCH_ACT_USER = 32,
+	TOUCH_ACT_9,*/
+	TOUCH_ACT_LAST,
+	TOUCH_ACT_USER = 24,
 	TOUCH_ACT_MAX = 64
 };
 
 typedef struct touchbutton_s
 {
 	wrect_t sRect;	// position and size
-	int iType;			// button type. Unused. All buttons in "tap" mode
+	int iType;			// button type.
 	int iState;
 	int hButton;		// button handle
 	char *pszCommand;	// command executed by button
@@ -80,7 +71,9 @@ typedef struct touchbutton_s
 
 typedef struct mobile_engfuncs_s
 {
-	int version; // indicates version of API. Should be equal to MOBILITY_API_VERSION
+	// indicates version of API. Should be equal to MOBILITY_API_VERSION
+	// version changes when existing functions are changes
+	int version;
 
 	// vibration control
 	// life -- time to vibrate in ms
@@ -98,7 +91,7 @@ typedef struct mobile_engfuncs_s
 	// xsize, ysize -- size
 	// hButton -- integer given by Touch_RegiserButton
 	// pszImage -- path to image for button. May be in any format that supported by Xash3D
-	touchbutton_t *(*Touch_AddCustomButton)( int xpos, int ypos, int xsize, int ysize, int hButton, const char *pszImageName);
+	touchbutton_t *(*Touch_AddCustomButton)( int x1, int y1, int x2, int y2, int hButton, const char *pszImageName);
 
 	// get touchbutton_t struct for button ID
 	// even for predefined buttons
@@ -111,7 +104,28 @@ typedef struct mobile_engfuncs_s
 	void (*Touch_EmitButton)( int hButton );
 
 	// temporarily disable touch controls
-	void (*Touch_Disable)( qboolean disable );
+	void (*Touch_Disable)( int disable );
+
+	// add to weapon wheel custom commands
+	// cmds -- array of commands
+	// segments -- sizeof(cmds)
+	// pszImage -- path to image
+	void (*Touch_SetWeaponWheel)( const char **cmds, int segments, const char *pszImageName );
+
+	// add temporaty button, edit will be disabled
+	void (*pfnTouchAddClientButton)( const char *name, const char *texture, const char *command, float x1, float y1, float x2, float y2, unsigned char *color, int round, float aspect );
+
+	// add button to defaults list. Will be loaded on config generation
+	void (*pfnTouchAddDefaultButton)( const char *name, const char *texturefile, const char *command, float x1, float y1, float x2, float y2, unsigned char *color, int round, float aspect, int mode );
+
+	// hide/show buttons by pattern
+	void (*pfnTouchHideButtons)( const char *name, unsigned char hide );
+
+	// remove button with given name
+	void (*pfnTouchRemoveButton)( const char *name );
+
+	// when enabled, only client buttons show
+	void (*pfnTouchSetClientOnly)( unsigned char state );
 
 	// To be continued...
 } mobile_engfuncs_t;

@@ -207,7 +207,7 @@ LINK_ENTITY_TO_CLASS( bodyque, CCorpse );
 
 static void InitBodyQue(void)
 {
-	string_t	istrClassname = MAKE_STRING("bodyque");
+	string_t	istrClassname = ALLOC_STRING("bodyque");
 
 	g_pBodyQueueHead = CREATE_NAMED_ENTITY( istrClassname );
 	entvars_t *pev = VARS(g_pBodyQueueHead);

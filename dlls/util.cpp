@@ -1576,7 +1576,7 @@ void UTIL_PrecacheOther( const char *szClassname )
 {
 	edict_t	*pent;
 
-	pent = CREATE_NAMED_ENTITY( MAKE_STRING( szClassname ) );
+	pent = CREATE_NAMED_ENTITY( ALLOC_STRING( szClassname ) );
 	if ( FNullEnt( pent ) )
 	{
 		ALERT ( at_console, "NULL Ent in UTIL_PrecacheOther\n" );
@@ -1982,7 +1982,7 @@ void EntvarsKeyvalue( entvars_t *pev, KeyValueData *pkvd )
 	int i;
 	TYPEDESCRIPTION		*pField;
 
-	for ( i = 0; i < ENTVARS_COUNT; i++ )
+	for ( i = 0; i < 2; i++ )
 	{
 		pField = &gEntvarsDescription[i];
 
