@@ -23,6 +23,8 @@ endif
 
 LOCAL_CFLAGS += -fsigned-char -DCLIENT_DLL=1
 
+SRCS=
+SRCS_C=
 SRCS+=../dlls/crossbow.cpp
 SRCS+=../dlls/crowbar.cpp
 SRCS+=../dlls/egon.cpp
