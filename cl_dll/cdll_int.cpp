@@ -291,8 +291,8 @@ void DLLEXPORT HUD_MobilityInterface( mobile_engfuncs_t *gpMobileEngfuncs )
     if( gpMobileEngfuncs->version != MOBILITY_API_VERSION )
         return;
     unsigned char color[4] = {255, 255, 255, 255};
-    gpMobileEngfuncs->pfnTouchAddDefaultButton( "flashlight", "touch_default/flashlight.tga", "impulse 100", 0.920000, 0.000000, 1.000000, 0.135271, color, 2, 1.0, 0 );
-    gpMobileEngfuncs->pfnTouchAddDefaultButton( "scores", "touch_default/map.tga", "+showscores", 0.680000, 0.000000, 0.760000, 0.135271, color, 2, 1.0, 2 );
+    gpMobileEngfuncs->pfnTouchAddDefaultButton( "flashlight", "touch_default/flash_light_filled.tga", "impulse 100", 0.920000, 0.000000, 1.000000, 0.135271, color, 2, 1.0, 0 );
+    gpMobileEngfuncs->pfnTouchAddDefaultButton( "scores", "touch_default/map.tga", "+showscores", 0.760000, 0.000000, 0.840000, 0.135271, color, 2, 1.0, 2 );
     gMobileEngfuncs = gpMobileEngfuncs;
 }
 
